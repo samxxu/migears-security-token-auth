@@ -1,6 +1,6 @@
 {
-    "name": "migears/token-auth",
-    "description": "miGears Token Auth - Bearer token authentication for native apps with rotating refresh tokens",
+    "name": "migears/security-token-auth",
+    "description": "miGears Security Token Auth - Bearer token authentication for native apps with rotating refresh tokens",
     "type": "library",
     "license": "MIT",
     "version": "2.0.0",
@@ -11,10 +11,12 @@
         "refresh-token",
         "api",
         "mobile",
+        "security",
         "migears"
     ],
     "require": {
         "php": "^8.1",
+        "psr/simple-cache": "^3.0",
         "migears/security": "^2.0"
     },
     "require-dev": {
@@ -23,12 +25,12 @@
     },
     "autoload": {
         "psr-4": {
-            "MiGears\\TokenAuth\\": "src/"
+            "MiGears\\SecurityTokenAuth\\": "src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "MiGears\\TokenAuth\\Tests\\": "tests/"
+            "MiGears\\SecurityTokenAuth\\Tests\\": "tests/"
         }
     },
     "repositories": {

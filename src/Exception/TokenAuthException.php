@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace MiGears\TokenAuth\Exception;
+namespace MiGears\SecurityTokenAuth\Exception;
 
 use MiGears\Security\Exception\SecurityException;
 
@@ -63,10 +63,13 @@ class TokenAuthException extends SecurityException
     }
 
     /**
-     * Create a new exception for a stored record that cannot be interpreted.
+     * Create a new exception for a write the store did not accept.
+     *
+     * A silent failure here is what turns a revocation into a no-op, so the
+     * module reports it rather than hiding it.
      */
-    public static function invalidRecord(): self
+    public static function storageFailure(string $reason): self
     {
-        return new self('Stored token record is malformed.');
+        return new self('Token storage failure: ' . $reason . '.');
     }
 }

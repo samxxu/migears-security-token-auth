@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace MiGears\TokenAuth\Tests;
+namespace MiGears\SecurityTokenAuth\Tests;
 
 use PHPUnit\Framework\TestCase;
-use MiGears\TokenAuth\ArrayTokenStore;
-use MiGears\TokenAuth\TokenAuth;
-use MiGears\TokenAuth\TokenRecord;
-use MiGears\TokenAuth\Exception\TokenAuthException;
+use MiGears\SecurityTokenAuth\TokenAuth;
+use MiGears\SecurityTokenAuth\TokenAuthInterface;
+use MiGears\SecurityTokenAuth\TokenRecord;
+use MiGears\SecurityTokenAuth\Exception\TokenAuthException;
 
 /**
  * A user stub exposing getId().
@@ -24,6 +24,17 @@ final class TestUser
     public function getId(): string
     {
         return $this->id;
+    }
+}
+
+/**
+ * A user stub whose getId() answers null, so no ID can be read.
+ */
+final class TestUserWithoutId
+{
+    public function getId(): ?string
+    {
+        return null;
     }
 }
 
@@ -71,9 +82,9 @@ final class TestArrayAccessUser implements \ArrayAccess
 
 final class TokenAuthTest extends TestCase
 {
-    private ArrayTokenStore $store;
+    private InMemoryCache $cache;
 
-    /** @var int Controllable clock used instead of time() */
+    /** @var int Controllable clock shared with the store */
     private int $now = 1700000000;
 
     /** @var array<string, TestUser> */
@@ -81,8 +92,10 @@ final class TokenAuthTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->store = new ArrayTokenStore();
         $this->now = 1700000000;
+        $this->cache = new InMemoryCache(function (): int {
+            return $this->now;
+        });
         $this->users = [
             '1' => new TestUser('1', 'Alice'),
             '2' => new TestUser('2', 'Bob'),
@@ -96,18 +109,25 @@ final class TokenAuthTest extends TestCase
         ?callable $userLoader = null,
     ): TokenAuth {
         return new TokenAuth(
-            store: $this->store,
+            store: $this->cache,
             userLoader: $userLoader ?? fn(string $id): ?object => $this->users[$id] ?? null,
             accessTtl: $accessTtl,
             refreshTtl: $refreshTtl,
             reuseGracePeriod: $reuseGracePeriod,
-            clock: fn(): int => $this->now,
+            clock: function (): int {
+                return $this->now;
+            },
         );
     }
 
-    private function hash(string $token): string
+    private function recordFor(string $token): ?TokenRecord
     {
-        return hash('sha256', $token);
+        return TokenRecord::fromStored($this->cache->get(TokenAuth::recordKey($token)));
+    }
+
+    private function familyIdOf(string $refreshToken): string
+    {
+        return (string) $this->recordFor($refreshToken)?->familyId;
     }
 
     // --- issue ---
@@ -127,28 +147,45 @@ final class TokenAuthTest extends TestCase
     {
         $pair = $this->createAuth()->issue($this->users['1']);
 
-        // The raw tokens must not be usable as storage keys
-        self::assertNull($this->store->find($pair->accessToken));
-        self::assertNull($this->store->find($pair->refreshToken));
+        // Neither key nor value may contain a usable token
+        foreach ($this->cache->keys() as $key) {
+            self::assertStringNotContainsString($pair->accessToken, $key);
+            self::assertStringNotContainsString($pair->refreshToken, $key);
+        }
 
-        self::assertSame(TokenRecord::TYPE_ACCESS, $this->store->find($this->hash($pair->accessToken))?->type);
-        self::assertSame(TokenRecord::TYPE_REFRESH, $this->store->find($this->hash($pair->refreshToken))?->type);
-        self::assertSame(2, $this->store->count());
+        foreach ($this->cache->values() as $value) {
+            self::assertStringNotContainsString($pair->accessToken, (string) json_encode($value));
+            self::assertStringNotContainsString($pair->refreshToken, (string) json_encode($value));
+        }
     }
 
-    public function testIssueRecordsUserIdAndDeviceId(): void
+    public function testIssueWritesTheDocumentedKeyLayout(): void
     {
-        $auth = $this->createAuth();
-        $pair = $auth->issue($this->users['1'], deviceId: 'iphone-15');
+        $pair = $this->createAuth()->issue($this->users['1'], deviceId: 'iphone-15');
 
-        $access = $this->store->find($this->hash($pair->accessToken));
-        $refresh = $this->store->find($this->hash($pair->refreshToken));
+        $access = $this->recordFor($pair->accessToken);
+        $refresh = $this->recordFor($pair->refreshToken);
+        $familyId = $this->familyIdOf($pair->refreshToken);
 
-        self::assertSame('1', $access?->userId);
+        // Two records, one family marker and one user generation
+        self::assertSame(4, $this->cache->count());
+
+        self::assertSame(TokenRecord::TYPE_ACCESS, $access?->type);
         self::assertSame('iphone-15', $access?->deviceId);
-        self::assertSame($access?->familyId, $refresh?->familyId);
         self::assertSame($this->now + TokenAuth::DEFAULT_ACCESS_TTL, $access?->expiresAt);
+        self::assertSame(TokenRecord::TYPE_REFRESH, $refresh?->type);
+        self::assertSame('1', $refresh?->userId);
         self::assertSame($this->now + TokenAuth::DEFAULT_REFRESH_TTL, $refresh?->expiresAt);
+        self::assertSame($access?->familyId, $refresh?->familyId);
+
+        // The marker holds the user generation the family was issued under,
+        // and both live for the whole family lifetime
+        $generation = $this->cache->get(TokenAuth::userKey('1'));
+        self::assertIsString($generation);
+        self::assertNotSame('', $generation);
+        self::assertSame($generation, $this->cache->get(TokenAuth::familyKey($familyId)));
+        self::assertSame(TokenAuth::DEFAULT_REFRESH_TTL, $this->cache->ttlOf(TokenAuth::familyKey($familyId)));
+        self::assertSame(TokenAuth::DEFAULT_REFRESH_TTL, $this->cache->ttlOf(TokenAuth::userKey('1')));
     }
 
     public function testEachIssueStartsANewFamily(): void
@@ -158,23 +195,35 @@ final class TokenAuthTest extends TestCase
         $second = $auth->issue($this->users['1']);
 
         self::assertNotSame(
-            $this->store->find($this->hash($first->refreshToken))?->familyId,
-            $this->store->find($this->hash($second->refreshToken))?->familyId,
+            $this->familyIdOf($first->refreshToken),
+            $this->familyIdOf($second->refreshToken),
         );
+    }
+
+    public function testSecondLoginKeepsTheUserGeneration(): void
+    {
+        $auth = $this->createAuth();
+        $auth->issue($this->users['1']);
+        $generation = $this->cache->get(TokenAuth::userKey('1'));
+
+        $auth->issue($this->users['1']);
+
+        self::assertSame($generation, $this->cache->get(TokenAuth::userKey('1')));
+        self::assertSame(1, $this->cache->writesOf(TokenAuth::userKey('1')));
     }
 
     public function testIssueWithUserProperty(): void
     {
         $pair = $this->createAuth()->issue(new TestUserWithProperty('7'));
 
-        self::assertSame('7', $this->store->find($this->hash($pair->accessToken))?->userId);
+        self::assertSame('7', $this->recordFor($pair->accessToken)?->userId);
     }
 
     public function testIssueWithArrayAccessUser(): void
     {
         $pair = $this->createAuth()->issue(new TestArrayAccessUser(['id' => '9']));
 
-        self::assertSame('9', $this->store->find($this->hash($pair->accessToken))?->userId);
+        self::assertSame('9', $this->recordFor($pair->accessToken)?->userId);
     }
 
     public function testIssueWithUserWithoutIdThrows(): void
@@ -183,6 +232,14 @@ final class TokenAuthTest extends TestCase
         $this->expectExceptionMessage('Cannot extract user ID');
 
         $this->createAuth()->issue(new \stdClass());
+    }
+
+    public function testIssueWithEmptyUserIdThrows(): void
+    {
+        $this->expectException(TokenAuthException::class);
+        $this->expectExceptionMessage('Cannot extract user ID');
+
+        $this->createAuth()->issue(new TestUserWithoutId());
     }
 
     // --- authenticate ---
@@ -232,12 +289,20 @@ final class TokenAuthTest extends TestCase
         $this->now += 61;
 
         self::assertNull($auth->authenticate($pair->accessToken));
-        self::assertNull($this->store->find($this->hash($pair->accessToken)));
+        self::assertNull($this->cache->get(TokenAuth::recordKey($pair->accessToken)));
     }
 
     public function testAuthenticateWhenLoaderReturnsNonObjectReturnsNull(): void
     {
         $auth = $this->createAuth(userLoader: fn(string $id): string => 'not-an-object');
+        $pair = $auth->issue($this->users['1']);
+
+        self::assertNull($auth->authenticate($pair->accessToken));
+    }
+
+    public function testAuthenticateWhenLoaderReturnsNullReturnsNull(): void
+    {
+        $auth = $this->createAuth(userLoader: fn(string $id): ?object => null);
         $pair = $auth->issue($this->users['1']);
 
         self::assertNull($auth->authenticate($pair->accessToken));
@@ -256,8 +321,8 @@ final class TokenAuthTest extends TestCase
         self::assertNotSame($first->refreshToken, $second->refreshToken);
         self::assertSame(TokenAuth::DEFAULT_ACCESS_TTL, $second->expiresIn);
         self::assertSame(
-            $this->store->find($this->hash($first->refreshToken))?->familyId,
-            $this->store->find($this->hash($second->refreshToken))?->familyId,
+            $this->familyIdOf($first->refreshToken),
+            $this->familyIdOf($second->refreshToken),
         );
     }
 
@@ -268,7 +333,12 @@ final class TokenAuthTest extends TestCase
 
         $auth->refresh($first->refreshToken);
 
-        self::assertSame($this->now, $this->store->find($this->hash($first->refreshToken))?->usedAt);
+        $consumed = $this->recordFor($first->refreshToken);
+        self::assertSame($this->now, $consumed?->usedAt);
+        self::assertTrue($consumed?->isUsed());
+
+        // A consumed record keeps its original lifetime, so the replay stays visible
+        self::assertSame(TokenAuth::DEFAULT_REFRESH_TTL, $this->cache->ttlOf(TokenAuth::recordKey($first->refreshToken)));
     }
 
     public function testRefreshKeepsTheDeviceId(): void
@@ -278,7 +348,7 @@ final class TokenAuthTest extends TestCase
 
         $second = $auth->refresh($first->refreshToken);
 
-        self::assertSame('iphone-15', $this->store->find($this->hash($second->refreshToken))?->deviceId);
+        self::assertSame('iphone-15', $this->recordFor($second->refreshToken)?->deviceId);
     }
 
     public function testRepeatedRefreshKeepsOneFamily(): void
@@ -290,10 +360,23 @@ final class TokenAuthTest extends TestCase
         $third = $auth->refresh($second->refreshToken);
 
         self::assertSame(
-            $this->store->find($this->hash($first->refreshToken))?->familyId,
-            $this->store->find($this->hash($third->refreshToken))?->familyId,
+            $this->familyIdOf($first->refreshToken),
+            $this->familyIdOf($third->refreshToken),
         );
         self::assertSame('1', $auth->authenticate($third->accessToken)?->getId());
+    }
+
+    public function testRotationDoesNotExtendTheFamilyLifetime(): void
+    {
+        $auth = $this->createAuth();
+        $first = $auth->issue($this->users['1']);
+        $familyKey = TokenAuth::familyKey($this->familyIdOf($first->refreshToken));
+
+        $auth->refresh($first->refreshToken);
+
+        // Only issue() writes the marker, so the family keeps its absolute lifetime
+        self::assertSame(1, $this->cache->writesOf($familyKey));
+        self::assertSame(TokenAuth::DEFAULT_REFRESH_TTL, $this->cache->ttlOf($familyKey));
     }
 
     public function testRefreshWithUnknownTokenThrows(): void
@@ -326,10 +409,37 @@ final class TokenAuthTest extends TestCase
             $auth->refresh($pair->refreshToken);
             self::fail('Expected the expired refresh token to be rejected.');
         } catch (TokenAuthException $e) {
+            // Expiry is the store's TTL, so an expired token reads as an unknown one
+            self::assertStringContainsString('unknown', $e->getMessage());
+        }
+
+        self::assertNull($this->cache->get(TokenAuth::recordKey($pair->refreshToken)));
+    }
+
+    public function testARecordKeptPastItsExpiryIsStillRejected(): void
+    {
+        $auth = $this->createAuth(refreshTtl: 100);
+        $pair = $auth->issue($this->users['1']);
+        $key = TokenAuth::recordKey($pair->refreshToken);
+
+        // A store that ignores or rounds up TTLs would still be holding the record
+        $this->cache->set($key, [
+            'type' => TokenRecord::TYPE_REFRESH,
+            'user_id' => '1',
+            'family_id' => $this->familyIdOf($pair->refreshToken),
+            'expires_at' => $this->now - 1,
+            'device_id' => null,
+            'used_at' => null,
+        ]);
+
+        try {
+            $auth->refresh($pair->refreshToken);
+            self::fail('Expected the expired refresh token to be rejected.');
+        } catch (TokenAuthException $e) {
             self::assertStringContainsString('expired', $e->getMessage());
         }
 
-        self::assertNull($this->store->find($this->hash($pair->refreshToken)));
+        self::assertNull($this->cache->get($key));
     }
 
     public function testReplayInsideGraceWindowIsTreatedAsARetry(): void
@@ -390,11 +500,13 @@ final class TokenAuthTest extends TestCase
     {
         $auth = $this->createAuth();
         $pair = $auth->issue($this->users['1']);
+        $familyKey = TokenAuth::familyKey($this->familyIdOf($pair->refreshToken));
 
         $auth->revoke($pair->refreshToken);
 
+        // The marker is what carries revocation, so the records themselves may stay
+        self::assertNull($this->cache->get($familyKey));
         self::assertNull($auth->authenticate($pair->accessToken));
-        self::assertSame(0, $this->store->count());
     }
 
     public function testRevokeKillsRotatedTokensToo(): void
@@ -408,7 +520,6 @@ final class TokenAuthTest extends TestCase
         // The access token issued before the rotation dies with the family
         self::assertNull($auth->authenticate($first->accessToken));
         self::assertNull($auth->authenticate($second->accessToken));
-        self::assertSame(0, $this->store->count());
     }
 
     public function testRevokeIsIdempotentForUnknownTokens(): void
@@ -418,7 +529,7 @@ final class TokenAuthTest extends TestCase
         $auth->revoke('not-a-real-token');
         $auth->revoke('not-a-real-token');
 
-        self::assertSame(0, $this->store->count());
+        self::assertSame(0, $this->cache->count());
     }
 
     public function testRevokeAcceptsAnAccessToken(): void
@@ -429,7 +540,36 @@ final class TokenAuthTest extends TestCase
         $auth->revoke($pair->accessToken);
 
         self::assertNull($auth->authenticate($pair->accessToken));
-        self::assertSame(0, $this->store->count());
+    }
+
+    public function testRevokeLeavesOtherFamiliesOfTheSameUserAlone(): void
+    {
+        $auth = $this->createAuth();
+        $phone = $auth->issue($this->users['1'], deviceId: 'iphone-15');
+        $tablet = $auth->issue($this->users['1'], deviceId: 'ipad-pro');
+
+        $auth->revoke($phone->refreshToken);
+
+        self::assertNull($auth->authenticate($phone->accessToken));
+        self::assertSame('1', $auth->authenticate($tablet->accessToken)?->getId());
+    }
+
+    // --- revokeAllForUser ---
+
+    public function testRevokeAllForUserKillsEveryFamilyOfThatUser(): void
+    {
+        $auth = $this->createAuth();
+        $phone = $auth->issue($this->users['1'], deviceId: 'iphone-15');
+        $tablet = $auth->issue($this->users['1'], deviceId: 'ipad-pro');
+
+        $auth->revokeAllForUser('1');
+
+        self::assertNull($auth->authenticate($phone->accessToken));
+        self::assertNull($auth->authenticate($tablet->accessToken));
+
+        $this->expectException(TokenAuthException::class);
+        $this->expectExceptionMessage('unknown');
+        $auth->refresh($phone->refreshToken);
     }
 
     public function testRevokeAllForUserOnlyTouchesThatUser(): void
@@ -441,18 +581,127 @@ final class TokenAuthTest extends TestCase
 
         $auth->revokeAllForUser('1');
 
-        self::assertSame(2, $this->store->count());
         self::assertSame('2', $auth->authenticate($other->accessToken)?->getId());
     }
 
-    public function testRevokeAllForUnknownUserIsANoOp(): void
+    public function testRevokeAllForAnUnknownUserLeavesEveryoneSignedIn(): void
     {
         $auth = $this->createAuth();
-        $auth->issue($this->users['1']);
+        $pair = $auth->issue($this->users['1']);
 
         $auth->revokeAllForUser('999');
 
-        self::assertSame(2, $this->store->count());
+        self::assertSame('1', $auth->authenticate($pair->accessToken)?->getId());
+    }
+
+    public function testLoginAfterRevokingAllStartsFresh(): void
+    {
+        $auth = $this->createAuth();
+        $old = $auth->issue($this->users['1']);
+        $auth->revokeAllForUser('1');
+
+        $fresh = $auth->issue($this->users['1']);
+
+        self::assertNull($auth->authenticate($old->accessToken));
+        self::assertSame('1', $auth->authenticate($fresh->accessToken)?->getId());
+
+        $rotated = $auth->refresh($fresh->refreshToken);
+        self::assertSame('1', $auth->authenticate($rotated->accessToken)?->getId());
+    }
+
+    // --- store failures and lost keys ---
+
+    public function testEvictedFamilyMarkerRejectsTheToken(): void
+    {
+        $auth = $this->createAuth();
+        $pair = $auth->issue($this->users['1']);
+
+        $this->cache->evict(TokenAuth::familyKey($this->familyIdOf($pair->refreshToken)));
+
+        self::assertNull($auth->authenticate($pair->accessToken));
+
+        $this->expectException(TokenAuthException::class);
+        $this->expectExceptionMessage('unknown');
+        $auth->refresh($pair->refreshToken);
+    }
+
+    public function testEvictedUserGenerationRejectsTheToken(): void
+    {
+        $auth = $this->createAuth();
+        $pair = $auth->issue($this->users['1']);
+
+        $this->cache->evict(TokenAuth::userKey('1'));
+
+        self::assertNull($auth->authenticate($pair->accessToken));
+    }
+
+    public function testCorruptedRecordValueCountsAsAMiss(): void
+    {
+        $auth = $this->createAuth();
+        $pair = $auth->issue($this->users['1']);
+
+        $this->cache->set(TokenAuth::recordKey($pair->accessToken), ['type' => 'access']);
+
+        self::assertNull($auth->authenticate($pair->accessToken));
+    }
+
+    public function testRefusedWriteDuringIssueThrows(): void
+    {
+        $auth = $this->createAuth();
+        $this->cache->refuseWrites();
+
+        $this->expectException(TokenAuthException::class);
+        $this->expectExceptionMessage('Token storage failure');
+
+        $auth->issue($this->users['1']);
+    }
+
+    public function testRefusedWriteDuringRevokeAllForUserThrows(): void
+    {
+        $auth = $this->createAuth();
+        $auth->issue($this->users['1']);
+        $this->cache->refuseWrites();
+
+        $this->expectException(TokenAuthException::class);
+        $this->expectExceptionMessage('Token storage failure');
+
+        $auth->revokeAllForUser('1');
+    }
+
+    public function testRefusedDeleteDuringRevokeThrows(): void
+    {
+        $auth = $this->createAuth();
+        $pair = $auth->issue($this->users['1']);
+        $this->cache->refuseDeletes();
+
+        $this->expectException(TokenAuthException::class);
+        $this->expectExceptionMessage('could not be revoked');
+
+        $auth->revoke($pair->refreshToken);
+    }
+
+    // --- interface ---
+
+    public function testTheInterfaceCoversTheWholeFlow(): void
+    {
+        $auth = $this->createAuth();
+        self::assertInstanceOf(TokenAuthInterface::class, $auth);
+
+        /** @var TokenAuthInterface $typed */
+        $typed = $auth;
+        $pair = $typed->issue($this->users['1'], deviceId: 'iphone-15');
+
+        self::assertSame('1', $typed->authenticate($pair->accessToken)?->getId());
+
+        // Rotation hands out a new pair; the access token issued before the rotation keeps
+        // working until its own TTL runs out, so a rotation never breaks a request in flight
+        $rotated = $typed->refresh($pair->refreshToken);
+        self::assertSame('1', $typed->authenticate($pair->accessToken)?->getId());
+        self::assertSame('1', $typed->authenticate($rotated->accessToken)?->getId());
+
+        $typed->revoke($rotated->refreshToken);
+        self::assertNull($typed->authenticate($pair->accessToken));
+        self::assertNull($typed->authenticate($rotated->accessToken));
     }
 
     // --- configuration ---
@@ -486,7 +735,7 @@ final class TokenAuthTest extends TestCase
         $this->expectException(TokenAuthException::class);
         $this->expectExceptionMessage('userLoader');
 
-        new TokenAuth(store: $this->store, userLoader: 42);
+        new TokenAuth(store: $this->cache, userLoader: 42);
     }
 
     public function testConstructorRejectsNonCallableClock(): void
@@ -495,7 +744,7 @@ final class TokenAuthTest extends TestCase
         $this->expectExceptionMessage('clock');
 
         new TokenAuth(
-            store: $this->store,
+            store: $this->cache,
             userLoader: fn(string $id): ?object => null,
             clock: 42,
         );

@@ -9,7 +9,7 @@
          failOnWarning="true"
          beStrictAboutOutputDuringTests="true">
     <testsuites>
-        <testsuite name="miGears Token Auth Test Suite">
+        <testsuite name="miGears Security Token Auth Test Suite">
             <directory>tests</directory>
         </testsuite>
     </testsuites>

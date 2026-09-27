@@ -2,16 +2,19 @@
 
 declare(strict_types=1);
 
-namespace MiGears\TokenAuth;
-
-use MiGears\TokenAuth\Exception\TokenAuthException;
+namespace MiGears\SecurityTokenAuth;
 
 /**
  * A stored token record.
  *
  * Records are immutable value objects; rotation replaces a record through
- * withUsedAt() rather than mutating it. Only the SHA-256 hash of a token is
- * ever used as the storage key, so a leaked store holds no usable token.
+ * withUsedAt() rather than mutating it. toArray() is the exact shape written to
+ * the PSR-16 store, and no field ever holds a usable credential: the cache key
+ * is derived from the token's hash.
+ *
+ * A record carries no revocation state of its own. Whether it is still honoured
+ * is decided by two cache keys outside it, the family marker and the user
+ * generation, so a revocation never has to touch the records themselves.
  */
 final class TokenRecord
 {
@@ -79,40 +82,48 @@ final class TokenRecord
     }
 
     /**
-     * Rebuild a record from its stored representation.
+     * Rebuild a record from the value read out of the store.
      *
-     * @param array<string, mixed> $data
+     * Returns null instead of throwing: whatever sits under a token's key either
+     * is one of our records or it counts as a cache miss, so a corrupted or
+     * foreign value can never be mistaken for a valid token.
      *
-     * @throws TokenAuthException If a required field is missing or has the wrong shape
+     * Timestamps also accept a numeric string, because cache adapters differ in
+     * how faithfully they round-trip integers.
      */
-    public static function fromArray(array $data): self
+    public static function fromStored(mixed $value): ?self
     {
-        if (!isset($data['type'], $data['user_id'], $data['family_id'], $data['expires_at'])) {
-            throw TokenAuthException::invalidRecord();
-        }
+        if (!is_array($value)) return null;
 
-        if (!is_string($data['type']) || !is_string($data['user_id']) || !is_string($data['family_id'])) {
-            throw TokenAuthException::invalidRecord();
-        }
+        $type = $value['type'] ?? null;
+        $userId = $value['user_id'] ?? null;
+        $familyId = $value['family_id'] ?? null;
+        $expiresAt = self::intOrNull($value['expires_at'] ?? null);
+        $deviceId = $value['device_id'] ?? null;
+        $usedAtRaw = $value['used_at'] ?? null;
+        $usedAt = self::intOrNull($usedAtRaw);
 
-        if (!is_int($data['expires_at'])) {
-            throw TokenAuthException::invalidRecord();
-        }
-
-        $deviceId = $data['device_id'] ?? null;
-        $usedAt = $data['used_at'] ?? null;
-
-        if (($deviceId !== null && !is_string($deviceId)) || ($usedAt !== null && !is_int($usedAt))) {
-            throw TokenAuthException::invalidRecord();
-        }
+        if (!is_string($type) || !is_string($userId) || !is_string($familyId)) return null;
+        if ($type !== self::TYPE_ACCESS && $type !== self::TYPE_REFRESH) return null;
+        if ($userId === '' || $familyId === '' || $expiresAt === null) return null;
+        if ($usedAtRaw !== null && $usedAt === null) return null;
+        if ($deviceId !== null && !is_string($deviceId)) return null;
 
         return new self(
-            type: $data['type'],
-            userId: $data['user_id'],
-            familyId: $data['family_id'],
-            expiresAt: $data['expires_at'],
+            type: $type,
+            userId: $userId,
+            familyId: $familyId,
+            expiresAt: $expiresAt,
             deviceId: $deviceId,
             usedAt: $usedAt,
         );
+    }
+
+    private static function intOrNull(mixed $value): ?int
+    {
+        if (is_int($value)) return $value;
+        if (is_string($value) && preg_match('/^-?\d+$/', $value) === 1) return (int) $value;
+
+        return null;
     }
 }

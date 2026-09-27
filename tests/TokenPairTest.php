@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace MiGears\TokenAuth\Tests;
+namespace MiGears\SecurityTokenAuth\Tests;
 
 use PHPUnit\Framework\TestCase;
-use MiGears\TokenAuth\TokenPair;
+use MiGears\SecurityTokenAuth\TokenPair;
 
 final class TokenPairTest extends TestCase
 {

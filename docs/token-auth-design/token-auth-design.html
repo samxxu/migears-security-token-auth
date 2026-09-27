@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>migears-token-auth 设计说明 / Design Notes</title>
+  <title>migears-security-token-auth 设计说明 / Design Notes</title>
 
   <style>
     :root {
@@ -319,7 +319,7 @@
     <header class="report-intro">
       <div class="report-intro__surface">
         <div class="report-intro__content">
-          <h1>migears-token-auth 设计说明<br>Bearer token authentication for native apps</h1>
+          <h1>migears-security-token-auth 设计说明<br>Bearer token authentication for native apps</h1>
           <p class="report-intro__subtitle">Author：miGears / 2026-09-27</p>
 
           <p class="report-intro__summary" lang="en">
@@ -336,10 +336,10 @@
           </p>
 
           <dl class="report-meta">
-            <div><dt>Module</dt><dd>migears-token-auth</dd></div>
+            <div><dt>Module</dt><dd>migears-security-token-auth</dd></div>
             <div><dt>Version</dt><dd>2.0.0</dd></div>
-            <div><dt>Depends on</dt><dd>migears/security ^2.0</dd></div>
-            <div><dt>Status</dt><dd>已实现 · 54 tests / 120 assertions · PHPStan level 6 通过</dd></div>
+            <div><dt>Depends on</dt><dd>migears/security ^2.0 · psr/simple-cache ^3.0</dd></div>
+            <div><dt>Status</dt><dd>已实现 · PHPUnit 全绿 · PHPStan level 6 通过</dd></div>
           </dl>
         </div>
       </div>
@@ -400,11 +400,37 @@
                   <td>身份来源（密码、短信、微信 / Apple 登录）</td>
                 </tr>
                 <tr>
-                  <th scope="row">存储契约 <code>TokenStoreInterface</code></th>
+                  <th scope="row">存储：任意 PSR-16 缓存</th>
                   <td>设备列表 / 单设备管理界面</td>
                 </tr>
               </tbody>
             </table>
+          </div>
+
+          <div class="lang-pair">
+            <div class="lang lang--en" lang="en">
+              <span class="lang__label">EN</span>
+              <p>
+                The package name follows the project's submodule convention: a
+                <code>migears-&lt;upstream&gt;-&lt;module&gt;</code> name is used only when a module is
+                meaningless without a single upstream. That upstream here is <code>migears/security</code>,
+                the only package this module requires. The prefix records that dependency, not a layering of
+                the two runtime channels: the browser channel and the token channel remain parallel, as
+                described in section 6. Every module without a single such upstream keeps the flat
+                <code>migears-&lt;thing&gt;</code> name.
+              </p>
+            </div>
+
+            <div class="lang">
+              <span class="lang__label">中文</span>
+              <p>
+                包名遵循项目的子模块命名约定：只有当模块离开唯一上游就失去意义时，才使用
+                <code>migears-&lt;上游&gt;-&lt;模块&gt;</code> 形式。这里的上游是 <code>migears/security</code>，
+                它是本模块唯一的依赖。前缀记录的是这层依赖关系，而不是两条运行时通道的叠加——浏览器通道与
+                令牌通道仍然是并列的，见第 6 节。没有这种唯一上游的模块，保持扁平的
+                <code>migears-&lt;名字&gt;</code> 命名。
+              </p>
+            </div>
           </div>
         </section>
 
@@ -451,8 +477,8 @@
                 </tr>
                 <tr>
                   <th scope="row">存储 Storage</th>
-                  <td>一条记录，键为 <code>sha256(token)</code></td>
-                  <td>一条记录，轮换后保留并标记 <code>used_at</code></td>
+                  <td>一条 PSR-16 记录，键为 <code>sha256(token)</code> 的前 32 位十六进制</td>
+                  <td>同样一条记录，轮换后保留并标记 <code>used_at</code></td>
                 </tr>
                 <tr>
                   <th scope="row">用途 Purpose</th>
@@ -522,31 +548,31 @@ sequenceDiagram
   participant App as 手机 App
   participant API as 服务端 API
   participant Auth as TokenAuth
-  participant Store as TokenStore
+  participant Store as PSR-16 缓存
 
   App->>API: POST /auth/login 账号 + 密码
   API->>Auth: issue(user, deviceId)
-  Auth->>Store: save(sha256(access)) + save(sha256(refresh))
+  Auth->>Store: 写族标记 + 两条记录（键为哈希前缀）
   Auth-->>API: TokenPair
   API-->>App: 200 access_token + refresh_token + expires_in
 
   App->>API: GET /api/me · Authorization: Bearer access
   API->>Auth: authenticate(access)
-  Auth->>Store: find(sha256(access))
+  Auth->>Store: 取记录，再批量取族标记与用户代次
   Auth-->>API: user
   API-->>App: 200 业务数据
 
   App->>API: POST /auth/refresh refresh_token
   API->>Auth: refresh(refresh)
-  Auth->>Store: 标记 used_at 并写入同族新对
+  Auth->>Store: 标记 used_at，再写入同族新对
   Auth-->>API: 新 TokenPair
   API-->>App: 200 新令牌对
             </div>
           </figure>
 
-          <pre><code>// 构造：只需一个存储实现与一个用户加载器
+          <pre><code>// 构造：只需一个 PSR-16 缓存与一个用户加载器
 $auth = new TokenAuth(
-    store: new ArrayTokenStore(),          // 生产环境换成 DB / Redis 实现
+    store: $cache,                         // 任意 PSR-16 缓存
     userLoader: fn(string $id): ?object => $users->find($id),
     accessTtl: 900,                        // 15 分钟
     refreshTtl: 2592000,                   // 30 天
@@ -577,7 +603,9 @@ $auth->revokeAllForUser($userId);          // 撤销该用户所有设备</code>
               <span class="lang__label">EN</span>
               <p>
                 A refresh token is <strong>single-use</strong>. On a successful refresh the presented token is
-                marked used before the successor is written, so a concurrent replay cannot slip through. If an
+                marked used before the successor is written, so a replay arriving afterwards is visible as reuse
+                rather than as an unknown token. PSR-16 has no compare-and-swap, so that holds for sequential
+                requests: two requests racing on the same token can both read it as unused. If an
                 already-used token appears again, the module must decide between a client retry and a stolen copy:
                 inside the grace window it answers “already used” and keeps the family alive; outside the window it
                 treats the request as theft and revokes <strong>the entire family</strong> — the successor refresh
@@ -588,9 +616,10 @@ $auth->revokeAllForUser($userId);          // 撤销该用户所有设备</code>
               <span class="lang__label">中文</span>
               <p>
                 refresh token 是<strong>一次性</strong>的。刷新成功时，先标记被出示的令牌为已使用，再写入后继令牌，
-                因此并发重放无法钻空子。若已使用的令牌再次出现，模块要在“客户端重试”和“令牌被盗用”之间做出判断：
-                在宽限期内回答“已使用”并保留令牌族；超出宽限期则视为盗用，撤销<strong>整个令牌族</strong>——
-                包括后继 refresh token 与该链条上签发的所有 access token。
+                因此随后到达的重放会被识别为“已使用”，而不是未知令牌。PSR-16 没有 compare-and-swap，这条保证只对
+                顺序请求成立：两个请求同时出示同一个令牌时，可能都读到“未使用”。若已使用的令牌再次出现，模块要在
+                “客户端重试”和“令牌被盗用”之间做出判断：在宽限期内回答“已使用”并保留令牌族；超出宽限期则视为盗用，
+                撤销<strong>整个令牌族</strong>——包括后继 refresh token 与该链条上签发的所有 access token。
               </p>
             </div>
           </div>
@@ -602,20 +631,22 @@ $auth->revokeAllForUser($userId);          // 撤销该用户所有设备</code>
             </figcaption>
             <div class="mermaid">
 flowchart TD
-  S["收到 refresh 请求"] --> F["按 sha256 查找记录"]
+  S["收到 refresh 请求"] --> F["按哈希取记录"]
   F --> N{"记录存在?"}
   N -->|否| E1["401 unknown"]
   N -->|是| T{"类型是 refresh?"}
   T -->|否| E1
   T -->|是| U{"已被使用?"}
   U -->|是| G{"距使用时刻 大于等于 宽限期?"}
-  G -->|是| RV["撤销整个令牌族"]
+  G -->|是| RV["删除族标记"]
   RV --> E2["401 reuse detected"]
   G -->|否| E3["401 already used 族保留"]
   U -->|否| X{"已过期?"}
   X -->|是| DP["删除该记录"]
   DP --> E4["401 expired"]
-  X -->|否| M["标记为已使用"]
+  X -->|否| L{"族标记存在且等于用户代次?"}
+  L -->|否| E1
+  L -->|是| M["标记为已使用"]
   M --> I["同族签发新令牌对"]
   I --> OK["200 返回新令牌对"]
             </div>
@@ -644,84 +675,129 @@ flowchart TD
         </section>
 
         <section id="store">
-          <h2>5. 存储契约与令牌族 / Store contract and families</h2>
+          <h2>5. 存储：PSR-16 与键布局 / Store: PSR-16 and the key layout</h2>
 
           <div class="lang-pair">
             <div class="lang lang--en" lang="en">
               <span class="lang__label">EN</span>
               <p>
-                The <strong>family</strong> is the unit of revocation: one login starts a family, every rotation
-                stays inside it, and revoking any token in the chain removes the whole chain. Implementations of
-                <code>TokenStoreInterface</code> therefore need an index on <code>family_id</code> and
-                <code>user_id</code>; the bundled <code>ArrayTokenStore</code> is an in-memory reference for tests
-                and single-process workers, not a production store.
+                The store is any <strong>PSR-16</strong> cache: <code>migears/cache</code>, a Redis or APCu adapter,
+                a database-backed one. That is the same dependency the browser channel already uses for its rotating
+                remember-me records (<code>MiGears\Security\RememberMe</code>), so one cache adapter serves both
+                channels and nobody has to write a store class to get started. PSR-16 cannot enumerate keys, and the
+                module never tries to: it owns three key prefixes, and revocation is expressed as deleting or
+                rewriting a <em>marker</em> rather than removing a set of records.
               </p>
             </div>
             <div class="lang">
               <span class="lang__label">中文</span>
               <p>
-                <strong>令牌族</strong>是撤销的最小单位：一次登录开启一个族，每次轮换都留在族内，撤销链上任意一个
-                令牌即整条链失效。因此 <code>TokenStoreInterface</code> 的实现需要对 <code>family_id</code> 与
-                <code>user_id</code> 建索引；随模块提供的 <code>ArrayTokenStore</code> 是内存版参考实现，适用于测试
-                与单进程场景，不是生产存储。
+                存储是任意 <strong>PSR-16</strong> 缓存：<code>migears/cache</code>、Redis 或 APCu 适配器、数据库型
+                适配器都可以。浏览器通道里会轮换的 remember-me 记录本来就跑在同一套依赖上
+                （<code>MiGears\Security\RememberMe</code>），因此一个缓存适配器可同时服务两条通道，接入时也不必先写
+                存储类。PSR-16 无法枚举键，模块也从不尝试枚举：它只占用三个键前缀，撤销表现为删除或重写一个
+                <em>标记</em>，而不是删除一批记录。
               </p>
             </div>
           </div>
 
+          <div class="table-wrap">
+            <table>
+              <caption>表 3 · 三个键前缀 / Table 3 · The three key prefixes</caption>
+              <thead>
+                <tr><th scope="col">键 / Key</th><th scope="col">内容 / Holds</th><th scope="col">生命期 / Lifetime</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row"><code>__migears_tok_</code> + hash</th>
+                  <td>一条令牌记录 / one token record</td>
+                  <td>access TTL 或 refresh TTL / access TTL or refresh TTL</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>__migears_fam_</code> + hash</th>
+                  <td>族标记：该族签发时所处的用户代次 / the family marker: the generation it was issued under</td>
+                  <td>refresh TTL，轮换不延长 / refresh TTL, never extended</td>
+                </tr>
+                <tr>
+                  <th scope="row"><code>__migears_usr_</code> + hash</th>
+                  <td>用户当前代次 / the user's current generation</td>
+                  <td>自最近一次登录或撤销起 refresh TTL / refresh TTL from the last login or revocation</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <caption>表 4 · 记录字段（<code>TokenRecord</code>）/ Table 4 · Record fields (<code>TokenRecord</code>)</caption>
+              <thead>
+                <tr><th scope="col">字段 / Field</th><th scope="col">含义 / Meaning</th><th scope="col">备注 / Note</th></tr>
+              </thead>
+              <tbody>
+                <tr><th scope="row"><code>type</code></th><td><code>access</code> 或 <code>refresh</code></td><td>防止 refresh 位置接受 access 令牌，反之亦然</td></tr>
+                <tr><th scope="row"><code>user_id</code></th><td>令牌归属用户</td><td>用户代次的键就是它的哈希；无需为撤销建二级索引</td></tr>
+                <tr><th scope="row"><code>family_id</code></th><td>轮换链标识</td><td>族标记的键就是它的哈希</td></tr>
+                <tr><th scope="row"><code>expires_at</code></th><td>失效时间戳</td><td>同时作为写入存储时的 TTL；判定采用 <code>&lt;=</code></td></tr>
+                <tr><th scope="row"><code>device_id</code></th><td>可选设备标识</td><td>随轮换延续，便于后续做设备管理</td></tr>
+                <tr><th scope="row"><code>used_at</code></th><td>被轮换消费的时间戳</td><td>重放检测的唯一依据</td></tr>
+              </tbody>
+            </table>
+          </div>
+
           <figure class="diagram">
             <figcaption>
-              图 3 · 令牌族：轮换链与撤销范围（实线＝轮换，虚线＝撤销）
-              <span>Figure 3 · A token family: rotation chain and revocation scope (solid = rotation, dashed = revocation)</span>
+              图 3 · 令牌族与两种撤销范围（实线＝轮换，虚线＝撤销）
+              <span>Figure 3 · A token family and the two revocation scopes (solid = rotation, dashed = revocation)</span>
             </figcaption>
             <div class="mermaid">
 flowchart LR
-  REV["revoke / 重放检测 / revokeAllForUser"]
-  subgraph FAM["令牌族 family-1 · 撤销的最小单位"]
+  REV["revoke · 撤销单个族"]
+  ALL["revokeAllForUser · 换新代次"]
+  subgraph FAM["族 family-1 · 族标记 __migears_fam_… = 代次 G1"]
     direction LR
     RA1["access #1"] --- RR1["refresh #1 · used_at 已标记"]
     RR1 -->|轮换| RR2["refresh #2 · 当前可用"]
     RR2 --- RA2["access #2"]
   end
-  REV -.->|deleteByFamily| RR1
-  REV -.->|整族一并删除| RA2
+  USR["用户代次 __migears_usr_… = G1"]
+  REV -.->|删除族标记| FAM
+  ALL -.->|改为 G2| USR
+  USR -->|标记 ≠ 当前代次 即整族失效| FAM
             </div>
           </figure>
 
-          <div class="table-wrap">
-            <table>
-              <caption>表 3 · 记录字段（<code>TokenRecord</code>）与存储方法 / Table 3 · Record fields and store methods</caption>
-              <thead>
-                <tr><th scope="col">字段 / 方法</th><th scope="col">含义</th><th scope="col">备注</th></tr>
-              </thead>
-              <tbody>
-                <tr><th scope="row"><code>type</code></th><td><code>access</code> 或 <code>refresh</code></td><td>防止 refresh 位置接受 access 令牌，反之亦然</td></tr>
-                <tr><th scope="row"><code>user_id</code></th><td>令牌归属用户</td><td><code>revokeAllForUser()</code> 的依据</td></tr>
-                <tr><th scope="row"><code>family_id</code></th><td>轮换链标识</td><td>族撤销的依据</td></tr>
-                <tr><th scope="row"><code>expires_at</code></th><td>失效时间戳</td><td>判定采用 <code>&lt;=</code>：正好到期即视为已失效</td></tr>
-                <tr><th scope="row"><code>device_id</code></th><td>可选设备标识</td><td>随轮换延续，便于后续做设备管理</td></tr>
-                <tr><th scope="row"><code>used_at</code></th><td>被轮换消费的时间戳</td><td>重放检测的唯一依据</td></tr>
-                <tr><th scope="row"><code>save / find / delete</code></th><td>单条记录读写</td><td>键为 <code>sha256(token)</code></td></tr>
-                <tr><th scope="row"><code>deleteByFamily / deleteByUser</code></th><td>按族 / 按用户批量删除</td><td>需要二级索引</td></tr>
-                <tr><th scope="row"><code>pruneExpired</code></th><td>清理已过期记录</td><td>由定时任务调用；模块不会自动调用它</td></tr>
-              </tbody>
-            </table>
+          <div class="callout">
+            <span class="callout__label">要求 Requirement · 持久且不淘汰 / durable and non-evicting</span>
+            <p lang="en">
+              Revocation is a key write, and a <strong>missing key counts as a mismatch</strong>. A backend that
+              drops keys under memory pressure therefore logs users out rather than resurrecting revoked tokens:
+              the safe direction, but still an outage. Treat this store as a system of record, run Redis with
+              <code>noeviction</code>, and prefer a database-backed adapter when in doubt. This is the one thing
+              PSR-16 cannot express, so it is a documented requirement rather than a type constraint.
+            </p>
+            <p>
+              撤销是一次键写入，而<strong>缺失的键一律按“不匹配”处理</strong>。会淘汰键的后端只会把用户登出，
+              而不会让已撤销的令牌复活：这是安全的方向，但仍属故障。请把这里当作记录源，Redis 配
+              <code>noeviction</code>，不确定时用数据库型适配器。这是 PSR-16 唯一表达不了的东西，因此它被写成
+              文档要求，而不是类型约束。
+            </p>
           </div>
 
           <div class="callout">
-            <span class="callout__label">运维注意 Operational note · 记录会增长</span>
+            <span class="callout__label">运维注意 Operational note · 记录与生命期 / records and lifetimes</span>
             <p lang="en">
               Used refresh records are deliberately <strong>kept</strong> until they expire, because deleting them
-              would make a replay indistinguishable from a random guess. A device that refreshes every 15 minutes
-              therefore leaves roughly 2,880 consumed records behind over a 30-day refresh lifetime. Run
-              <code>pruneExpired()</code> from a scheduled job, or shorten the refresh TTL, and keep the housekeeping
-              out of the request path — the module never sweeps the store on its own, so per-request cost stays
-              predictable.
+              would make a replay indistinguishable from a random guess; with the store owning TTLs, no cleanup job
+              is needed any more. A device that refreshes every 15 minutes leaves roughly 2,880 consumed records
+              behind over a 30-day refresh lifetime. A family also lives exactly <code>refreshTtl</code> from its
+              login: rotation re-issues the pair but never extends the family marker, so a client that keeps
+              refreshing still has to log in again once that window has passed.
             </p>
             <p>
-              已使用的 refresh 记录会被<strong>刻意保留</strong>至过期，因为一旦删除，重放就与随机猜测无法区分。
-              因此每隔 15 分钟刷新一次的设备，在 30 天的 refresh 生命周期内会累积约 2,880 条已消费记录。请用定时任务
-              调用 <code>pruneExpired()</code>，或缩短 refresh TTL；清理不放在请求路径上——模块自身从不扫描存储，
-              以保证每请求开销可预测。
+              已使用的 refresh 记录会被<strong>刻意保留</strong>至过期，因为一旦删除，重放就与随机猜测无法区分；
+              过期交给存储的 TTL 之后，也不再需要清理任务。每隔 15 分钟刷新一次的设备，在 30 天生命期内会累积约
+              2,880 条已消费记录。此外，一个族自登录起只活 <code>refreshTtl</code>：轮换会发出新的一对，但从不延长
+              族标记，因此持续刷新的客户端过了这个窗口仍需重新登录。
             </p>
           </div>
         </section>
@@ -767,14 +843,14 @@ flowchart TB
 
           <div class="table-wrap">
             <table>
-              <caption>表 4 · <code>MiAuth</code> 与 <code>TokenAuth</code> 对照 / Table 4 · <code>MiAuth</code> versus <code>TokenAuth</code></caption>
+              <caption>表 5 · <code>MiAuth</code> 与 <code>TokenAuth</code> 对照 / Table 5 · <code>MiAuth</code> versus <code>TokenAuth</code></caption>
               <thead>
                 <tr><th scope="col">维度</th><th scope="col">MiAuth（浏览器）</th><th scope="col">TokenAuth（原生 App）</th></tr>
               </thead>
               <tbody>
                 <tr><th scope="row">凭证载体</th><td><code>PHPSESSID</code> + remember-me Cookie</td><td><code>Authorization: Bearer</code></td></tr>
                 <tr><th scope="row">传递方式</th><td>浏览器自动携带，受 HttpOnly / Secure / SameSite 保护</td><td>由客户端显式携带，无 Cookie 语义，必须 TLS</td></tr>
-                <tr><th scope="row">服务端状态</th><td>会话 + 自包含密文 Cookie</td><td>两条只含哈希的记录</td></tr>
+                <tr><th scope="row">服务端状态</th><td>会话 + 自包含密文 Cookie</td><td>PSR-16 缓存里的三条键：令牌记录、族标记、用户代次，且只含哈希</td></tr>
                 <tr><th scope="row">长期凭证</th><td>remember-me，30 天，当前不可撤销</td><td>refresh token，30 天，可轮换、可撤销</td></tr>
                 <tr><th scope="row">主要威胁</th><td>会话固定（已在登录时轮换会话 ID）</td><td>令牌重放（族撤销 + 宽限期）</td></tr>
                 <tr><th scope="row">CSRF</th><td>需要防护</td><td>不适用（不依赖 Cookie）</td></tr>
@@ -806,16 +882,16 @@ flowchart TB
 
           <div class="table-wrap">
             <table>
-              <caption>表 5 · <code>TokenAuth</code> 公开方法 / Table 5 · Public methods of <code>TokenAuth</code></caption>
+              <caption>表 6 · <code>TokenAuth</code> 公开方法 / Table 6 · Public methods of <code>TokenAuth</code></caption>
               <thead>
                 <tr><th scope="col">方法</th><th scope="col">作用</th><th scope="col">失败行为</th></tr>
               </thead>
               <tbody>
-                <tr><th scope="row"><code>issue(object $user, ?string $deviceId = null): TokenPair</code></th><td>开启新族并签发令牌对</td><td>用户 ID 无法提取时抛 <code>TokenAuthException</code></td></tr>
-                <tr><th scope="row"><code>refresh(string $refreshToken): TokenPair</code></th><td>轮换并签发同族新对</td><td>未知 / 类型不符 / 过期 / 重放 → 抛异常，各有独立消息</td></tr>
-                <tr><th scope="row"><code>revoke(string $refreshToken): void</code></th><td>撤销令牌族</td><td>未知令牌静默返回，登出保持幂等</td></tr>
-                <tr><th scope="row"><code>revokeAllForUser(string $userId): void</code></th><td>撤销该用户全部设备</td><td>未知用户静默返回</td></tr>
-                <tr><th scope="row"><code>authenticate(string $accessToken): ?object</code></th><td>Bearer 令牌 → 用户</td><td>未知 / 过期 / 类型不符 → 返回 <code>null</code>（不抛异常）</td></tr>
+                <tr><th scope="row"><code>issue(object $user, ?string $deviceId = null): TokenPair</code></th><td>开启新族并签发令牌对</td><td>用户 ID 无法提取或存储写入被拒时抛 <code>TokenAuthException</code></td></tr>
+                <tr><th scope="row"><code>refresh(string $refreshToken): TokenPair</code></th><td>轮换并签发同族新对</td><td>未知 / 类型不符 / 已过期（通常已被存储淘汰）/ 重放 → 抛异常，消息可区分</td></tr>
+                <tr><th scope="row"><code>revoke(string $token): void</code></th><td>撤销令牌族（access token 亦可）</td><td>未知令牌静默返回，登出保持幂等；删除被拒时抛异常</td></tr>
+                <tr><th scope="row"><code>revokeAllForUser(string $userId): void</code></th><td>撤销该用户全部设备</td><td>写入被拒时抛异常</td></tr>
+                <tr><th scope="row"><code>authenticate(string $accessToken): ?object</code></th><td>Bearer 令牌 → 用户</td><td>未知 / 过期 / 类型不符 / 已撤销 → 返回 <code>null</code>（不抛异常）</td></tr>
                 <tr><th scope="row"><code>TokenPair::toArray(): array</code></th><td>OAuth 2.0 令牌响应形状</td><td>—</td></tr>
               </tbody>
             </table>
@@ -826,16 +902,17 @@ flowchart TB
               <span class="lang__label">EN</span>
               <p>
                 <code>revoke()</code> looks the token up by hash, so passing the access token works as well: both
-                records carry the same <code>family_id</code>, and the family is what gets removed. Exceptions are
-                <code>TokenAuthException</code>, which extends the shared <code>SecurityException</code>, so existing
-                catch blocks keep working.
+                records carry the same <code>family_id</code>, and the family marker is what gets removed. Exceptions
+                are <code>TokenAuthException</code>, which extends the shared <code>SecurityException</code>, so
+                existing catch blocks keep working. <code>TokenAuthInterface</code> covers both sides of the flow,
+                <code>authenticate()</code> included, so middleware can depend on the interface instead of the class.
               </p>
             </div>
             <div class="lang">
               <span class="lang__label">中文</span>
               <p>
                 <code>revoke()</code> 按哈希查找令牌，因此传入 access token 同样有效：两条记录的
-                <code>family_id</code> 相同，被移除的是整个族。异常类型为 <code>TokenAuthException</code>，
+                <code>family_id</code> 相同，被移除的是族标记。异常类型为 <code>TokenAuthException</code>，
                 它继承自共用的 <code>SecurityException</code>，既有 catch 块无需改动。
               </p>
             </div>
@@ -853,8 +930,18 @@ flowchart TB
             </div>
             <div class="rows__item">
               <strong>令牌不可无状态校验 / No stateless verification</strong>
-              <p lang="en">Because access tokens are opaque, every protected request performs one store lookup. A JWT layer can be placed behind the caller's middleware if that trade is unacceptable.</p>
-              <p>由于 access token 不透明，每个受保护请求都会产生一次存储读取。若不接受这一取舍，可在调用方中间件后面接一层 JWT。</p>
+              <p lang="en">Because access tokens are opaque, every protected request reads the store twice: the record first, then the family marker and the user generation in one batch. A JWT layer can be placed behind the caller's middleware if that trade is unacceptable.</p>
+              <p>由于 access token 不透明，每个受保护请求都会读两次存储：先读记录，再一次性批量读取族标记与用户代次。若不接受这一取舍，可在调用方中间件后面接一层 JWT。</p>
+            </div>
+            <div class="rows__item">
+              <strong>无并发原子性 / No compare-and-swap</strong>
+              <p lang="en">PSR-16 offers no atomic compare-and-swap, so single use holds for sequential requests only: two requests racing on the same refresh token can both read it as unused and both receive a successor. Rotation still keeps a stolen token to one use per race, and the second write is visible as reuse afterwards.</p>
+              <p>PSR-16 没有原子 compare-and-swap，因此“一次性”只对顺序请求成立：两个请求同时出示同一个 refresh token 时，可能都读到“未使用”并各自拿到新令牌。轮换仍能把被盗令牌限制在一次之内，且第二次写入之后会以“重放”的形式暴露出来。</p>
+            </div>
+            <div class="rows__item">
+              <strong>存储后端必须持久且不淘汰 / The backend must be durable and non-evicting</strong>
+              <p lang="en">Revocation lives in keys, and a missing key is treated as a mismatch. An evicting backend therefore signs users out instead of resurrecting revoked tokens: safe, but an outage. This is a deployment requirement, not something the module can enforce.</p>
+              <p>撤销存在于键里，而缺失的键一律按“不匹配”处理。会淘汰键的后端只会把用户登出，而不会让已撤销的令牌复活：安全，但属于故障。这是部署要求，模块自身无法强制。</p>
             </div>
             <div class="rows__item">
               <strong>无设备管理 / No device management</strong>
@@ -878,12 +965,12 @@ flowchart TB
               <p>不要放入 URL、查询串或日志；客户端把令牌存入 Keychain（iOS）／ Keystore（Android）。</p>
             </div>
             <div class="rows__item">
-              <strong>2 · 生产环境实现共享 <code>TokenStoreInterface</code></strong>
-              <p>DB 或 Redis，并对 <code>family_id</code>、<code>user_id</code> 建索引；单机内存版仅用于开发与测试。</p>
+              <strong>2 · 用持久且不淘汰的 PSR-16 后端</strong>
+              <p>Redis 配 <code>noeviction</code>，或用数据库型适配器；撤销依赖键的存活，被淘汰的键会让用户被动登出。</p>
             </div>
             <div class="rows__item">
-              <strong>3 · 定时清理</strong>
-              <p>由 cron 调用 <code>pruneExpired()</code>，避免已消费记录长期累积。</p>
+              <strong>3 · 容量按 TTL 估算，无需清理任务</strong>
+              <p>已消费的 refresh 记录会保留至过期（约每设备 2,880 条 / 30 天），过期由存储的 TTL 处理，模块不提供清库方法。</p>
             </div>
             <div class="rows__item">
               <strong>4 · 授权步骤用系统浏览器 + 授权码 + PKCE</strong>

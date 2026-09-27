@@ -2,11 +2,10 @@
 
 declare(strict_types=1);
 
-namespace MiGears\TokenAuth\Tests;
+namespace MiGears\SecurityTokenAuth\Tests;
 
 use PHPUnit\Framework\TestCase;
-use MiGears\TokenAuth\TokenRecord;
-use MiGears\TokenAuth\Exception\TokenAuthException;
+use MiGears\SecurityTokenAuth\TokenRecord;
 
 final class TokenRecordTest extends TestCase
 {
@@ -58,11 +57,11 @@ final class TokenRecordTest extends TestCase
         self::assertFalse($record->isUsed());
     }
 
-    public function testArrayRoundTrip(): void
+    public function testStoredRoundTrip(): void
     {
         $record = $this->record()->withUsedAt(1500);
 
-        self::assertEquals($record, TokenRecord::fromArray($record->toArray()));
+        self::assertEquals($record, TokenRecord::fromStored($record->toArray()));
     }
 
     public function testToArrayUsesSnakeCaseKeys(): void
@@ -77,51 +76,105 @@ final class TokenRecordTest extends TestCase
         ], $this->record()->toArray());
     }
 
-    public function testFromArrayRejectsMissingFields(): void
+    public function testFromStoredRejectsValuesThatAreNotArrays(): void
     {
-        $this->expectException(TokenAuthException::class);
-        $this->expectExceptionMessage('malformed');
-
-        TokenRecord::fromArray(['type' => 'access']);
+        self::assertNull(TokenRecord::fromStored('a string'));
+        self::assertNull(TokenRecord::fromStored(42));
+        self::assertNull(TokenRecord::fromStored(null));
+        self::assertNull(TokenRecord::fromStored(new \stdClass()));
     }
 
-    public function testFromArrayRejectsWrongScalarTypes(): void
+    public function testFromStoredRejectsMissingFields(): void
     {
-        $this->expectException(TokenAuthException::class);
-        $this->expectExceptionMessage('malformed');
+        self::assertNull(TokenRecord::fromStored(['type' => 'access']));
+        self::assertNull(TokenRecord::fromStored([
+            'type' => 'access',
+            'user_id' => '42',
+            'family_id' => 'family-1',
+        ]));
+    }
 
-        TokenRecord::fromArray([
+    public function testFromStoredRejectsAnUnknownType(): void
+    {
+        self::assertNull(TokenRecord::fromStored([
+            'type' => 'session',
+            'user_id' => '42',
+            'family_id' => 'family-1',
+            'expires_at' => 2000,
+        ]));
+    }
+
+    public function testFromStoredRejectsEmptyIdentityFields(): void
+    {
+        self::assertNull(TokenRecord::fromStored([
+            'type' => 'access',
+            'user_id' => '',
+            'family_id' => 'family-1',
+            'expires_at' => 2000,
+        ]));
+
+        self::assertNull(TokenRecord::fromStored([
+            'type' => 'access',
+            'user_id' => '42',
+            'family_id' => '',
+            'expires_at' => 2000,
+        ]));
+    }
+
+    public function testFromStoredAcceptsNumericStringTimestamps(): void
+    {
+        // Cache adapters differ in how faithfully they round-trip integers
+        $record = TokenRecord::fromStored([
             'type' => 'access',
             'user_id' => '42',
             'family_id' => 'family-1',
             'expires_at' => '2000',
+            'used_at' => '1500',
         ]);
+
+        self::assertSame(2000, $record?->expiresAt);
+        self::assertSame(1500, $record?->usedAt);
     }
 
-    public function testFromArrayRejectsMalformedOptionalFields(): void
+    public function testFromStoredRejectsMalformedTimestamps(): void
     {
-        $this->expectException(TokenAuthException::class);
-        $this->expectExceptionMessage('malformed');
+        self::assertNull(TokenRecord::fromStored([
+            'type' => 'access',
+            'user_id' => '42',
+            'family_id' => 'family-1',
+            'expires_at' => 'soon',
+        ]));
 
-        TokenRecord::fromArray([
+        self::assertNull(TokenRecord::fromStored([
             'type' => 'access',
             'user_id' => '42',
             'family_id' => 'family-1',
             'expires_at' => 2000,
             'used_at' => 'soon',
-        ]);
+        ]));
     }
 
-    public function testFromArrayDefaultsOptionalFieldsToNull(): void
+    public function testFromStoredRejectsMalformedOptionalFields(): void
     {
-        $record = TokenRecord::fromArray([
+        self::assertNull(TokenRecord::fromStored([
+            'type' => 'access',
+            'user_id' => '42',
+            'family_id' => 'family-1',
+            'expires_at' => 2000,
+            'device_id' => 17,
+        ]));
+    }
+
+    public function testFromStoredDefaultsOptionalFieldsToNull(): void
+    {
+        $record = TokenRecord::fromStored([
             'type' => 'access',
             'user_id' => '42',
             'family_id' => 'family-1',
             'expires_at' => 2000,
         ]);
 
-        self::assertNull($record->deviceId);
-        self::assertNull($record->usedAt);
+        self::assertNull($record?->deviceId);
+        self::assertNull($record?->usedAt);
     }
 }

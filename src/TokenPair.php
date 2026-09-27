@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace MiGears\TokenAuth;
+namespace MiGears\SecurityTokenAuth;
 
 /**
  * An issued token pair.
