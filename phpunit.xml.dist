@@ -5,9 +5,14 @@
          colors="true"
          cacheDirectory=".phpunit.cache"
          executionOrder="random"
-         failOnRisky="true"
          failOnWarning="true"
-         beStrictAboutOutputDuringTests="true">
+         failOnNotice="true"
+         failOnDeprecation="true"
+         failOnRisky="true"
+         beStrictAboutOutputDuringTests="true"
+         displayDetailsOnTestsThatTriggerWarnings="true"
+         displayDetailsOnTestsThatTriggerNotices="true"
+         displayDetailsOnTestsThatTriggerDeprecations="true">
     <testsuites>
         <testsuite name="miGears Security Token Auth Test Suite">
             <directory>tests</directory>
