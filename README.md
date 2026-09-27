@@ -4,11 +4,13 @@ Bearer token authentication for native apps and other non-browser clients: short
 access tokens, single-use rotating refresh tokens, replay detection, and hashed-only storage.
 
 It is the second authentication channel next to `migears-security`'s browser session
-implementation (`MiAuth`). The two share nothing but your own user lookup.
+implementation (`MiAuth`). Beyond the low-level `Token` and `SecurityException` helpers both use, the
+two share nothing but your own user lookup.
 
 **On the name.** The `security-` prefix marks this package as a submodule of `migears/security`: that
-is the only package it requires, and it exists because the browser-shaped session there cannot serve
-native clients. Modules without a single such upstream keep the flat `migears-<thing>` name.
+is the only miGears package it requires — its other runtime dependency is `psr/simple-cache` — and it
+exists because the browser-shaped session there cannot serve native clients. Modules without a single
+such upstream keep the flat `migears-<thing>` name.
 
 ## Why a separate module
 
@@ -154,12 +156,12 @@ MIT
 面向原生 App 及其他非浏览器客户端的 Bearer 令牌认证：短期不透明 access token、一次性轮换的
 refresh token、重放检测，以及只存哈希的服务端存储。
 
-它是 `migears-security` 浏览器会话实现（`MiAuth`）之外的第二条认证通道。两者除“你自己的用户查询”
-外没有任何共享。
+它是 `migears-security` 浏览器会话实现（`MiAuth`）之外的第二条认证通道。两者除了共用的底层
+`Token` 与 `SecurityException`，只共享“你自己的用户查询”。
 
-**关于名字。** `security-` 前缀表示它是 `migears/security` 的子模块：后者是它唯一的依赖，而它存在的
-理由正是那个包里的浏览器形态会话无法服务原生客户端。没有这种唯一上游的模块，仍用扁平的
-`migears-<名字>`。
+**关于名字。** `security-` 前缀表示它是 `migears/security` 的子模块：后者是它唯一依赖的 miGears 包
+（另一个运行时依赖是 `psr/simple-cache`），而它存在的理由正是那个包里的浏览器形态会话无法服务原生
+客户端。没有这种唯一上游的模块，仍用扁平的 `migears-<名字>`。
 
 ## 为什么要独立成模块
 

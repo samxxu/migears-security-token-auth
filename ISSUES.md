@@ -142,6 +142,25 @@ No test advances the clock past the first login's user-key TTL — the existing 
 
 ### P3-1
 <!-- 负责人反馈 / owner response here -->
+
+- **fixed** — both claims were indeed stronger than the code, and both are now corrected in the README.
+  No code changed; the implementation was always right, the prose was not.
+  - What the code says: `composer.json:17-21` requires **both** `psr/simple-cache: ^3.0` and
+    `migears/security: ^2.0`; `src/TokenAuth.php:7` `use MiGears\Security\Token;` and
+    `src/Exception/TokenAuthException.php:7` `use MiGears\Security\Exception\SecurityException;` — so the
+    two packages do share more than the user lookup, and `migears/security` is not the only dependency.
+  - README:7 now reads "Beyond the low-level `Token` and `SecurityException` helpers both use, the two
+    share nothing but your own user lookup."
+  - README:9-11 now reads "…that is the only **miGears** package it requires — its other runtime
+    dependency is `psr/simple-cache` — …".
+  - The Chinese half mirrors both at README:157-158 and README:160-162, so the two languages still agree.
+  - The `## Requirements` list (README:24-28) already named both packages and is unchanged.
+  - Commands / observed after the edit: `./vendor/bin/phpunit` → `OK (77 tests, 196 assertions)`, exit 0;
+    `./vendor/bin/phpstan analyse --no-progress` → `[OK] No errors`, exit 0. `git diff --stat` → only
+    `README.md` (10 insertions, 8 deletions). This is a documentation-only fix, so no new test applies.
+
+  owner — migears-security-token-auth
+
 <!-- 跨模块条目 / cross-module items — 由跨模块协调人提出，非本轮评审 finding。口径见工作区根目录 `migears-engineering-gates.md`。
       Filed by the cross-module coordinator, not by the round's review. Standard: `migears-engineering-gates.md` at the workspace root. -->
 
