@@ -200,16 +200,40 @@ final class TokenAuthTest extends TestCase
         );
     }
 
-    public function testSecondLoginKeepsTheUserGeneration(): void
+    public function testSecondLoginKeepsTheUserGenerationAndRenewsItsTtl(): void
     {
-        $auth = $this->createAuth();
+        $auth = $this->createAuth(refreshTtl: 100);
         $auth->issue($this->users['1']);
         $generation = $this->cache->get(TokenAuth::userKey('1'));
 
+        $this->now += 90;
         $auth->issue($this->users['1']);
 
+        // The value is unchanged, so logging in on one device never signs out another...
         self::assertSame($generation, $this->cache->get(TokenAuth::userKey('1')));
-        self::assertSame(1, $this->cache->writesOf(TokenAuth::userKey('1')));
+        // ...but its lifetime follows the most recent login, not the first one
+        self::assertSame(2, $this->cache->writesOf(TokenAuth::userKey('1')));
+        self::assertSame(100, $this->cache->ttlOf(TokenAuth::userKey('1')));
+    }
+
+    public function testALaterLoginKeepsItsFamilyAlivePastTheFirstLoginsUserTtl(): void
+    {
+        // refreshTtl 100, accessTtl 900: the scenario the report reproduces.
+        $auth = $this->createAuth(accessTtl: 900, refreshTtl: 100);
+        $auth->issue($this->users['1']);           // t=0: seeds the user generation, which expires at t=100
+
+        $this->now += 90;
+        $second = $auth->issue($this->users['1']); // t=90: its family marker lives until t=190
+
+        $this->now += 11;                          // t=101: one second past the first login's user-key TTL
+
+        // The family issued at t=90 still had nearly all of its 900s access life and must still work.
+        self::assertSame('1', $auth->authenticate($second->accessToken)?->getId());
+
+        // A login at t=101 must not bump the generation and silently sign that family out.
+        $third = $auth->issue($this->users['1']);
+        self::assertSame('1', $auth->authenticate($second->accessToken)?->getId());
+        self::assertSame('1', $auth->authenticate($third->accessToken)?->getId());
     }
 
     public function testIssueWithUserProperty(): void
@@ -490,6 +514,23 @@ final class TokenAuthTest extends TestCase
 
         $this->expectException(TokenAuthException::class);
         $this->expectExceptionMessage('revoked');
+
+        $auth->refresh($first->refreshToken);
+    }
+
+    public function testRefusedDeleteWhileRevokingAReplayedFamilyThrows(): void
+    {
+        $auth = $this->createAuth(reuseGracePeriod: 30);
+        $first = $auth->issue($this->users['1']);
+        $auth->refresh($first->refreshToken);
+
+        $this->now += 31;
+        $this->cache->refuseDeletes();
+
+        // The replay revokes the family; a store that refuses the delete must not
+        // leave that revocation unnoticed, exactly as revoke() does not.
+        $this->expectException(TokenAuthException::class);
+        $this->expectExceptionMessage('could not be revoked');
 
         $auth->refresh($first->refreshToken);
     }

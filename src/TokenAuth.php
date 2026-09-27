@@ -344,11 +344,19 @@ final class TokenAuth implements TokenAuthInterface
     }
 
     /**
-     * The user's current revocation generation, seeded on first use.
+     * The user's current revocation generation, seeded on first use and kept
+     * alive by every later login.
      *
-     * The seed writes only when the key is absent, and never refreshes an existing
-     * value: rewriting a value read earlier could land after a concurrent
-     * revokeAllForUser() and silently undo it.
+     * An existing generation is written back only to renew its TTL, so it lives
+     * refreshTtl from the most recent login rather than from the first one. That
+     * is required because a family marker is written once and never extended: if
+     * this key expired on the first login's schedule, a family issued later would
+     * be refused while its own marker was still alive. The value itself is only
+     * ever replaced by revokeAllForUser().
+     *
+     * PSR-16 has no compare-and-swap, so a login racing with revokeAllForUser()
+     * can still write the old generation back; the window is one get/set pair,
+     * the same concurrency caveat the class documents for token single use.
      *
      * @throws TokenAuthException If the generation cannot be stored
      */
@@ -356,10 +364,7 @@ final class TokenAuth implements TokenAuthInterface
     {
         $key = self::userKey($userId);
         $current = $this->store->get($key);
-
-        if (is_string($current) && $current !== '') return $current;
-
-        $generation = $this->newGeneration();
+        $generation = is_string($current) && $current !== '' ? $current : $this->newGeneration();
 
         $this->write($key, $generation, $this->now() + $this->refreshTtl, 'the user generation');
 
@@ -378,8 +383,12 @@ final class TokenAuth implements TokenAuthInterface
         // A grace period of 0 means "revoke on the first replay".
         if ($usedAgo >= $this->reuseGracePeriod) {
             // Outside the window a rotated token can only come from a copy of the
-            // stored token, so the entire family is revoked.
-            $this->store->delete(self::familyKey($record->familyId));
+            // stored token, so the entire family is revoked. A store that refuses
+            // the delete must not let the revocation fail silently, exactly as in
+            // revoke().
+            if ($this->store->delete(self::familyKey($record->familyId)) !== true) {
+                return TokenAuthException::storageFailure('the token family could not be revoked');
+            }
 
             return TokenAuthException::refreshTokenReuseDetected();
         }
