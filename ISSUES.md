@@ -17,11 +17,11 @@ Legend — **P0** functional or security · **P1** documentation that fails when
 
 | | |
 |---|---|
-| Unsettled | P0 0 · P1 0 · P2 1 · P3 3 · other 1 |
-| Settled | 3 of 8 |
+| Unsettled | P0 0 · P1 0 · P2 1 · P3 2 · other 0 |
+| Settled | 5 of 8 |
 | Waiting on the owner | `P2-2`, `P3-2`, `P3-3` |
-| Waiting on the reviewer | `P3-1`, `G2` |
 | Waiting on the coordinator | _nothing_ |
+| Waiting on the reviewer | _nothing_ |
 | Deferred, owing nobody | _nothing_ |
 
 | id | level | status | title |
@@ -30,10 +30,10 @@ Legend — **P0** functional or security · **P1** documentation that fails when
 | [`P1-2`](issues/P1-2.md) | P1 | **verified** | The `__migears_usr_` generation key is written only on the first … |
 | [`P2-1`](issues/P2-1.md) | P2 | **verified** | `handleReuse()` ignores the return value of deleting the family marker, … |
 | [`P2-2`](issues/P2-2.md) | P2 | **open** | `revoke()` through an expired access token silently no-ops. The access … |
-| [`P3-1`](issues/P3-1.md) | P3 | **fixed** | Two README claims are stronger than the code: 'the two share nothing … |
+| [`P3-1`](issues/P3-1.md) | P3 | **verified** | Two README claims are stronger than the code: 'the two share nothing … |
 | [`P3-2`](issues/P3-2.md) | P3 | **open** | A replay seen after the server clock moved backwards is classified as a … |
 | [`P3-3`](issues/P3-3.md) | P3 | **open** | `deviceId` is stored verbatim, CR and LF included. Harmless here … |
-| [`G2`](issues/G2.md) | - | **fixed** | Strict flags: `phpunit.xml.dist` currently sets `failOnWarning`, … |
+| [`G2`](issues/G2.md) | - | **verified** | Strict flags: `phpunit.xml.dist` currently sets `failOnWarning`, … |
 
 ## Unclosed
 
@@ -42,17 +42,15 @@ highest severity first. `waiting on` is the party who acts next, read from that 
 
 | | |
 |---|---|
-| Unclosed | **5** of 8 |
-| By status | `open` 3 · `fixed` 2 |
-| Waiting on | owner 3 · reviewer 2 |
+| Unclosed | **3** of 8 |
+| By status | `open` 3 |
+| Waiting on | owner 3 |
 
 | level | item | status | waiting on | title |
 |---|---|---|---|---|
 | **P2** | [`P2-2`](issues/P2-2.md) | `open` | owner | `revoke()` through an expired access token silently no-ops. The access … |
-| **P3** | [`P3-1`](issues/P3-1.md) | `fixed` | reviewer | Two README claims are stronger than the code: 'the two share nothing … |
 | **P3** | [`P3-2`](issues/P3-2.md) | `open` | owner | A replay seen after the server clock moved backwards is classified as a … |
 | **P3** | [`P3-3`](issues/P3-3.md) | `open` | owner | `deviceId` is stored verbatim, CR and LF included. Harmless here … |
-| **-** | [`G2`](issues/G2.md) | `fixed` | reviewer | Strict flags: `phpunit.xml.dist` currently sets `failOnWarning`, … |
 
 ## Verdict
 
@@ -93,11 +91,11 @@ No test for concurrent refresh attempts (race condition on token rotation); no t
 
 | | |
 |---|---|
-| 未了结 | P0 0 · P1 0 · P2 1 · P3 3 · 其他 1 |
-| 已了结 | 3 / 8 |
-| 等负责人 | `P2-2`, `P3-2`, `P3-3` |
-| 等评审方 | `P3-1`, `G2` |
+| 未了结 | P0 0 · P1 0 · P2 1 · P3 2 · 其他 0 |
+| 已了结 | 5 / 8 |
+| 等模块主 | `P2-2`, `P3-2`, `P3-3` |
 | 等协调人 | _无_ |
+| 等评审方 | _无_ |
 | 已暂缓，不欠谁 | _无_ |
 
 | id | 级别 | 状态 | 标题 |
@@ -106,10 +104,10 @@ No test for concurrent refresh attempts (race condition on token rotation); no t
 | [`P1-2`](issues/P1-2.md) | P1 | **verified** | __migears_usr_ 代次键只在第一次 issue() 写入、之后不再写回（为避开与 revokeAllForUser() … |
 | [`P2-1`](issues/P2-1.md) | P2 | **verified** | handleReuse() 忽略删除族标记的返回值，因此拒绝删除的存储后端会让重放撤销静默失效——而同样的失败在 revoke() 里是会抛 … |
 | [`P2-2`](issues/P2-2.md) | P2 | **open** | 用已过期的 access token 调 `revoke()` 会静默 no-op。access 记录只活 `accessTtl`（15 … |
-| [`P3-1`](issues/P3-1.md) | P3 | **fixed** | 两处 README 表述强于实现：「两者除了你的用户查询外不共享任何东西」（本包 require 并复用了 … |
+| [`P3-1`](issues/P3-1.md) | P3 | **verified** | 两处 README 表述强于实现：「两者除了你的用户查询外不共享任何东西」（本包 require 并复用了 … |
 | [`P3-2`](issues/P3-2.md) | P3 | **open** | 服务器时钟回拨后见到的重放被判为「重试」、保留族，而非盗用。令牌本身仍被拒，属 … |
 | [`P3-3`](issues/P3-3.md) | P3 | **open** | `deviceId` 原样存储，含 CR 与 … |
-| [`G2`](issues/G2.md) | - | **fixed** | 严格开关：`phpunit.xml.dist` 目前已开启 … |
+| [`G2`](issues/G2.md) | - | **verified** | 严格开关：`phpunit.xml.dist` 目前已开启 … |
 
 ## 未关闭
 
@@ -118,17 +116,15 @@ No test for concurrent refresh attempts (race condition on token rotation); no t
 
 | | |
 |---|---|
-| 未关闭 | **5** / 8 |
-| 按状态 | `open` 3 · `fixed` 2 |
-| 等在谁 | 负责人 3 · 评审方 2 |
+| 未关闭 | **3** / 8 |
+| 按状态 | `open` 3 |
+| 等在谁 | 模块主 3 |
 
 | 级别 | 条目 | 状态 | 等在谁 | 标题 |
 |---|---|---|---|---|
-| **P2** | [`P2-2`](issues/P2-2.md) | `open` | 负责人 | 用已过期的 access token 调 `revoke()` 会静默 no-op。access 记录只活 `accessTtl`（15 … |
-| **P3** | [`P3-1`](issues/P3-1.md) | `fixed` | 评审方 | 两处 README 表述强于实现：「两者除了你的用户查询外不共享任何东西」（本包 require 并复用了 … |
-| **P3** | [`P3-2`](issues/P3-2.md) | `open` | 负责人 | 服务器时钟回拨后见到的重放被判为「重试」、保留族，而非盗用。令牌本身仍被拒，属 … |
-| **P3** | [`P3-3`](issues/P3-3.md) | `open` | 负责人 | `deviceId` 原样存储，含 CR 与 … |
-| **-** | [`G2`](issues/G2.md) | `fixed` | 评审方 | 严格开关：`phpunit.xml.dist` 目前已开启 … |
+| **P2** | [`P2-2`](issues/P2-2.md) | `open` | 模块主 | 用已过期的 access token 调 `revoke()` 会静默 no-op。access 记录只活 `accessTtl`（15 … |
+| **P3** | [`P3-2`](issues/P3-2.md) | `open` | 模块主 | 服务器时钟回拨后见到的重放被判为「重试」、保留族，而非盗用。令牌本身仍被拒，属 … |
+| **P3** | [`P3-3`](issues/P3-3.md) | `open` | 模块主 | `deviceId` 原样存储，含 CR 与 … |
 
 ## 结论
 

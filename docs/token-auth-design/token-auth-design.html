@@ -889,7 +889,7 @@ flowchart TB
               <tbody>
                 <tr><th scope="row"><code>issue(object $user, ?string $deviceId = null): TokenPair</code></th><td>开启新族并签发令牌对</td><td>用户 ID 无法提取或存储写入被拒时抛 <code>TokenAuthException</code></td></tr>
                 <tr><th scope="row"><code>refresh(string $refreshToken): TokenPair</code></th><td>轮换并签发同族新对</td><td>未知 / 类型不符 / 已过期（通常已被存储淘汰）/ 重放 → 抛异常，消息可区分</td></tr>
-                <tr><th scope="row"><code>revoke(string $token): void</code></th><td>撤销令牌族（access token 亦可）</td><td>未知令牌静默返回，登出保持幂等；删除被拒时抛异常</td></tr>
+                <tr><th scope="row"><code>revoke(string $token): void</code></th><td>撤销令牌族（该族的任意<strong>存活</strong>令牌；登出请用 refresh token）</td><td>未知或已过期令牌静默返回，登出保持幂等；删除被拒时抛异常</td></tr>
                 <tr><th scope="row"><code>revokeAllForUser(string $userId): void</code></th><td>撤销该用户全部设备</td><td>写入被拒时抛异常</td></tr>
                 <tr><th scope="row"><code>authenticate(string $accessToken): ?object</code></th><td>Bearer 令牌 → 用户</td><td>未知 / 过期 / 类型不符 / 已撤销 → 返回 <code>null</code>（不抛异常）</td></tr>
                 <tr><th scope="row"><code>TokenPair::toArray(): array</code></th><td>OAuth 2.0 令牌响应形状</td><td>—</td></tr>
@@ -901,19 +901,22 @@ flowchart TB
             <div class="lang lang--en" lang="en">
               <span class="lang__label">EN</span>
               <p>
-                <code>revoke()</code> looks the token up by hash, so passing the access token works as well: both
-                records carry the same <code>family_id</code>, and the family marker is what gets removed. Exceptions
-                are <code>TokenAuthException</code>, which extends the shared <code>SecurityException</code>, so
-                existing catch blocks keep working. <code>TokenAuthInterface</code> covers both sides of the flow,
+                <code>revoke()</code> looks the token up by hash and drops the family marker, so any
+                <strong>live</strong> token of the family works: the refresh token, or an access token whose record
+                has not expired yet. An access token past its <code>accessTtl</code> has already lost its record,
+                so revoking with it is a silent no-op and the family survives — log out with the refresh token.
+                Exceptions are <code>TokenAuthException</code>, which extends the shared <code>SecurityException</code>,
+                so existing catch blocks keep working. <code>TokenAuthInterface</code> covers both sides of the flow,
                 <code>authenticate()</code> included, so middleware can depend on the interface instead of the class.
               </p>
             </div>
             <div class="lang">
               <span class="lang__label">中文</span>
               <p>
-                <code>revoke()</code> 按哈希查找令牌，因此传入 access token 同样有效：两条记录的
-                <code>family_id</code> 相同，被移除的是族标记。异常类型为 <code>TokenAuthException</code>，
-                它继承自共用的 <code>SecurityException</code>，既有 catch 块无需改动。
+                <code>revoke()</code> 按哈希查找令牌并删除族标记，因此该族的任意<strong>存活</strong>令牌都可用来撤销：
+                refresh token 可以，尚未过期的 access token 也可以。已过 <code>accessTtl</code> 的 access token
+                早已失去自己的记录，用它撤销是静默 no-op、族依然存活——登出请用 refresh token。异常类型为
+                <code>TokenAuthException</code>，它继承自共用的 <code>SecurityException</code>，既有 catch 块无需改动。
               </p>
             </div>
           </div>
@@ -952,6 +955,16 @@ flowchart TB
               <strong>无发送方绑定 / No sender-constraining</strong>
               <p lang="en">Tokens are plain bearer values: whoever holds one can use it. Sender-constrained mechanisms such as DPoP are future work, not current behaviour.</p>
               <p>令牌是纯 Bearer 值：谁持有谁可用。DPoP 这类发送方绑定机制属于后续工作，当前并未实现。</p>
+            </div>
+            <div class="rows__item">
+              <strong>重放判定依赖单调时钟 / Reuse detection assumes a monotonic clock</strong>
+              <p lang="en">Reuse detection compares the current time with the consumed record's <code>usedAt</code>. If the server clock steps backwards — an NTP correction, a manual change — that difference goes negative, which reads as "inside the grace window": the replay is answered as a retry and the family is kept instead of revoked. Only the server clock is involved and a client cannot influence it, so the exposure is a stretch of weaker theft detection rather than a bypass a caller can trigger.</p>
+              <p>重放判定比较当前时间与被消费记录的 <code>usedAt</code>。若服务器时钟回拨——NTP 校正、手工改时间——该差值会变成负数，从而落在宽限期内：重放被当作重试答复，族被保留而不撤销。这里只涉及服务器时钟，客户端无法影响它，因此暴露的是“这段时间防盗窃检测变弱”，而不是调用方能触发的绕过。</p>
+            </div>
+            <div class="rows__item">
+              <strong><code>deviceId</code> 原样存储 / <code>deviceId</code> is stored verbatim</strong>
+              <p lang="en"><code>deviceId</code> is recorded exactly as the caller passes it, control characters included; the module neither normalises nor rejects it. It only ever lands in the record's value, never in a cache key, so it cannot break the key layout. Validate or sanitise it before echoing or logging it, as with any other caller-supplied string.</p>
+              <p><code>deviceId</code> 会按调用方传入的原样记录，控制字符在内；模块既不做规范化也不拒绝。它只进入记录的值、从不进入缓存键，因此不会破坏键布局。若需回显或写日志，请像对待其它调用方提供的字符串一样先做校验或净化。</p>
             </div>
           </div>
         </section>
