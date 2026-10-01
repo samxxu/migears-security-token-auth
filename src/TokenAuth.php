@@ -216,6 +216,14 @@ final class TokenAuth implements TokenAuthInterface
     }
 
     /**
+     * Revoke a rotation family through any live token of that family.
+     *
+     * Revocation resolves the presented token to its record and drops the family marker,
+     * so it needs a token the store still holds. An access token whose accessTtl has
+     * passed has lost its record by then, so revoking with it is a silent no-op and the
+     * family — the marker and the refresh token — survives. Log out with the refresh
+     * token. Unknown or already revoked tokens are a no-op as well.
+     *
      * @throws TokenAuthException If the revocation could not be stored
      */
     public function revoke(string $token): void

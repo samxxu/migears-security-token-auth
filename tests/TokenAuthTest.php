@@ -316,6 +316,27 @@ final class TokenAuthTest extends TestCase
         self::assertNull($this->cache->get(TokenAuth::recordKey($pair->accessToken)));
     }
 
+    public function testAnAccessRecordKeptPastItsExpiryIsStillRejected(): void
+    {
+        $auth = $this->createAuth(accessTtl: 60);
+        $pair = $auth->issue($this->users['1']);
+        $key = TokenAuth::recordKey($pair->accessToken);
+
+        // A store that ignores or rounds up TTLs would still be holding the record,
+        // exactly as in testARecordKeptPastItsExpiryIsStillRejected on the refresh side
+        $this->cache->set($key, [
+            'type' => TokenRecord::TYPE_ACCESS,
+            'user_id' => '1',
+            'family_id' => $this->familyIdOf($pair->refreshToken),
+            'expires_at' => $this->now - 1,
+            'device_id' => null,
+            'used_at' => null,
+        ]);
+
+        self::assertNull($auth->authenticate($pair->accessToken));
+        self::assertNull($this->cache->get($key));
+    }
+
     public function testAuthenticateWhenLoaderReturnsNonObjectReturnsNull(): void
     {
         $auth = $this->createAuth(userLoader: fn(string $id): string => 'not-an-object');
@@ -581,6 +602,26 @@ final class TokenAuthTest extends TestCase
         $auth->revoke($pair->accessToken);
 
         self::assertNull($auth->authenticate($pair->accessToken));
+    }
+
+    public function testRevokeWithAnExpiredAccessTokenLeavesTheFamilyAlive(): void
+    {
+        $auth = $this->createAuth(accessTtl: 60);
+        $pair = $auth->issue($this->users['1']);
+        $familyKey = TokenAuth::familyKey($this->familyIdOf($pair->refreshToken));
+
+        // The access record lives accessTtl only; past it the store has dropped it.
+        $this->now += 61;
+        self::assertNull($this->cache->get(TokenAuth::recordKey($pair->accessToken)));
+
+        // revoke() resolves the token through its record, so an expired access token
+        // cannot resolve the family: the call is a silent no-op, not a revocation.
+        $auth->revoke($pair->accessToken);
+
+        // The marker and the 30-day refresh token are untouched, so refresh still works
+        self::assertNotNull($this->cache->get($familyKey));
+        $rotated = $auth->refresh($pair->refreshToken);
+        self::assertSame('1', $auth->authenticate($rotated->accessToken)?->getId());
     }
 
     public function testRevokeLeavesOtherFamiliesOfTheSameUserAlone(): void

@@ -85,6 +85,22 @@ $auth->revokeAllForUser($userId);
 | Verification | `authenticate()` returns the user or `null`, so middleware never branches on exceptions |
 | Exceptions | `TokenAuthException` extends `SecurityException`, so existing catch blocks keep working |
 
+## Boundaries
+
+**In scope**
+
+- Opaque token pairs: `issue()` returns a `TokenPair` carrying a short-lived `access` and a long-lived `refresh` token (`TokenPair::toArray()` speaks the OAuth 2.0 token response).
+- Single-use rotating refresh tokens with replay detection: a replayed token inside `reuseGracePeriod` answers "already used"; outside it, the whole rotation family is revoked.
+- The store key layout over any PSR-16 cache — one record, one family marker, one user generation — hashed-only, computed by `TokenAuth::recordKey()` / `familyKey()` / `userKey()`.
+- Revocation and verification: `revoke()` drops a family, `revokeAllForUser()` bumps a user generation, and `authenticate()` returns the user or `null`.
+
+**Not in scope (by design)**
+
+- The low-level primitives and the browser channel — `Token`, `SecurityException`, `MiAuth` and its `AuthInterface` stay in `migears/security`; this package reuses `Token`, extends `SecurityException`, and deliberately does not implement `AuthInterface`.
+- The cache backend itself: no store implementation lives here. The caller supplies any PSR-16 cache, such as `migears/cache`.
+- HTTP transport and headers: no request parsing, no `Authorization: Bearer` handling, no response or 401 output; turning `TokenPair::toArray()` and a `null` from `authenticate()` into HTTP belongs to the caller or framework.
+- User identity and lookup: `userLoader` is supplied by the caller, and the module never talks to a user store.
+
 ## Storage
 
 The store is any [PSR-16](https://www.php-fig.org/psr/psr-16/) cache: `migears/cache`, a Redis or APCu
@@ -233,6 +249,22 @@ $auth->revokeAllForUser($userId);
 | 生命期 | 一个族自登录起只活 `refreshTtl`；轮换不会延长它 |
 | 校验 | `authenticate()` 返回用户或 `null`，中间件无需处理异常分支 |
 | 异常 | `TokenAuthException` 继承 `SecurityException`，既有 catch 块无需改动 |
+
+## 边界
+
+**范围内**
+
+- 不透明令牌对：`issue()` 返回 `TokenPair`，含短期 `access` 与长期 `refresh`（`TokenPair::toArray()` 遵循 OAuth 2.0 令牌响应）。
+- 一次性轮换的 refresh token 与重放检测：宽限期 `reuseGracePeriod` 内的重放回答「已使用」，超出则撤销整个轮换族。
+- 基于任意 PSR-16 缓存的键布局 —— 一条令牌记录、一个族标记、一个用户代次 —— 键只含哈希，由 `TokenAuth::recordKey()` / `familyKey()` / `userKey()` 计算。
+- 撤销与校验：`revoke()` 删除族标记，`revokeAllForUser()` 更换用户代次，`authenticate()` 返回用户或 `null`。
+
+**范围外（刻意不做）**
+
+- 底层原语与浏览器通道 —— `Token`、`SecurityException`、`MiAuth` 及其 `AuthInterface` 都留在 `migears/security`；本包复用 `Token`、继承 `SecurityException`，并刻意不实现 `AuthInterface`。
+- 缓存后端本身：本包不实现任何存储。由调用方提供任意 PSR-16 缓存，例如 `migears/cache`。
+- HTTP 传输与响应头：不解析请求、不处理 `Authorization: Bearer`、不输出响应或 401；把 `TokenPair::toArray()` 与 `authenticate()` 的 null 结果变成 HTTP 属于调用方或框架。
+- 用户身份与查询：`userLoader` 由调用方提供，本模块从不访问用户存储。
 
 ## 存储
 

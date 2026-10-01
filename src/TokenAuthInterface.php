@@ -33,9 +33,13 @@ interface TokenAuthInterface
     public function refresh(string $refreshToken): TokenPair;
 
     /**
-     * Revoke a rotation family through any token of that family.
+     * Revoke a rotation family through any live token of that family.
      *
-     * Revoking an unknown or already revoked token is a no-op, so logout stays idempotent.
+     * Only a token the store still holds can revoke: the presented token is resolved to
+     * its record and then to the family. An access token that has already expired has
+     * lost its record, so revoking with it is a no-op and the family survives — present
+     * the refresh token to log out. Revoking an unknown or already revoked token is a
+     * no-op too, so logout stays idempotent.
      *
      * @throws TokenAuthException If the revocation could not be stored
      */
